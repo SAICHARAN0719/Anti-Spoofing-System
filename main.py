@@ -1,12 +1,10 @@
-import os.path
+import os
 import datetime
 import pickle
-
 import tkinter as tk
 import cv2
 from PIL import Image, ImageTk
 import face_recognition
-
 import util
 from test import test
 
@@ -35,6 +33,10 @@ class App:
         if not os.path.exists(self.db_dir):
             os.mkdir(self.db_dir)
 
+        self.images_dir = os.path.join(self.db_dir, 'images')
+        if not os.path.exists(self.images_dir):
+            os.mkdir(self.images_dir)
+
         self.log_path = './log.txt'
 
     def add_webcam(self, label):
@@ -56,52 +58,67 @@ class App:
 
         self._label.after(20, self.process_webcam)
 
-    def login(self):
-
+    def deepfake_detection(self, frame):
+        """
+        Function to detect deepfake video.
+        Returns:
+            True if a deepfake is detected, False otherwise.
+        """
+        # Call the deepfake detection model (assumed to be in your anti-spoof models directory)
         label = test(
-                image=self.most_recent_capture_arr,
+                image=frame,
                 model_dir='./Silent-Face-Anti-Spoofing/resources/anti_spoof_models',
                 device_id=0
-                )
+        )
 
-        if label == 1:
+        # If label == 0, it's a spoof (deepfake)
+        if label == 0:
+            return True  # Deepfake detected
+        else:
+            return False  # Not a deepfake
+
+    def login(self):
+        try:
+            # Check for deepfake before proceeding with login
+            if self.deepfake_detection(self.most_recent_capture_arr):
+                util.msg_box('Hey, you are a spoofer!', 'You are fake!')
+                return
 
             name = util.recognize(self.most_recent_capture_arr, self.db_dir)
 
             if name in ['unknown_person', 'no_persons_found']:
                 util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
             else:
-                util.msg_box('Welcome back !', 'Welcome, {}.'.format(name))
-                with open(self.log_path, 'a') as f:
-                    f.write('{},{},in\n'.format(name, datetime.datetime.now()))
-                    f.close()
+                # Check if image exists for the user
+                user_image_path = os.path.join(self.images_dir, f'{name}.jpg')
+                if os.path.exists(user_image_path):
+                    util.msg_box('Warning', 'User is already registered with an image!')
+                else:
+                    util.msg_box('Welcome back !', f'Welcome, {name}.')
+                    with open(self.log_path, 'a') as f:
+                        f.write(f'{name},{datetime.datetime.now()},in\n')
 
-        else:
-            util.msg_box('Hey, you are a spoofer!', 'You are fake !')
+        except KeyboardInterrupt:
+            util.msg_box('Error', 'The application was interrupted unexpectedly. Please try again.')
 
     def logout(self):
-
-        label = test(
-                image=self.most_recent_capture_arr,
-                model_dir='./Silent-Face-Anti-Spoofing/resources/anti_spoof_models',
-                device_id=0
-                )
-
-        if label == 1:
+        try:
+            # Check for deepfake before proceeding with logout
+            if self.deepfake_detection(self.most_recent_capture_arr):
+                util.msg_box('Hey, you are a spoofer!', 'You are fake!')
+                return
 
             name = util.recognize(self.most_recent_capture_arr, self.db_dir)
 
             if name in ['unknown_person', 'no_persons_found']:
                 util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
             else:
-                util.msg_box('Hasta la vista !', 'Goodbye, {}.'.format(name))
+                util.msg_box('Hasta la vista !', f'Goodbye, {name}.')
                 with open(self.log_path, 'a') as f:
-                    f.write('{},{},out\n'.format(name, datetime.datetime.now()))
-                    f.close()
+                    f.write(f'{name},{datetime.datetime.now()},out\n')
 
-        else:
-            util.msg_box('Hey, you are a spoofer!', 'You are fake !')
-
+        except KeyboardInterrupt:
+            util.msg_box('Error', 'The application was interrupted unexpectedly. Please try again.')
 
     def register_new_user(self):
         self.register_new_user_window = tk.Toplevel(self.main_window)
@@ -135,17 +152,30 @@ class App:
         self.register_new_user_capture = self.most_recent_capture_arr.copy()
 
     def start(self):
-        self.main_window.mainloop()
+        try:
+            self.main_window.mainloop()
+        except KeyboardInterrupt:
+            util.msg_box('Error', 'The application was interrupted unexpectedly. Please try again.')
 
     def accept_register_new_user(self):
         name = self.entry_text_register_new_user.get(1.0, "end-1c")
 
+        # Check if the user already exists (based on the image folder)
+        user_image_path = os.path.join(self.images_dir, f'{name}.jpg')
+        if os.path.exists(user_image_path):
+            util.msg_box('Warning', 'User is already registered with an image!')
+            return  # Prevent further registration
+
+        # Save the image of the user
+        cv2.imwrite(user_image_path, self.register_new_user_capture)
+
         embeddings = face_recognition.face_encodings(self.register_new_user_capture)[0]
 
-        file = open(os.path.join(self.db_dir, '{}.pickle'.format(name)), 'wb')
-        pickle.dump(embeddings, file)
+        # Save the user's embeddings to a pickle file
+        with open(os.path.join(self.db_dir, f'{name}.pickle'), 'wb') as file:
+            pickle.dump(embeddings, file)
 
-        util.msg_box('Success!', 'User was registered successfully !')
+        util.msg_box('Success!', 'User was registered successfully!')
 
         self.register_new_user_window.destroy()
 
