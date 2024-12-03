@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import face_recognition
 import util
 from test import test
+import threading
 
 
 class App:
@@ -14,16 +15,17 @@ class App:
         self.main_window = tk.Tk()
         self.main_window.geometry("1200x520+350+100")
 
+        # Buttons for login/logout/register functionalities
         self.login_button_main_window = util.get_button(self.main_window, 'login', 'green', self.login)
         self.login_button_main_window.place(x=750, y=200)
 
         self.logout_button_main_window = util.get_button(self.main_window, 'logout', 'red', self.logout)
         self.logout_button_main_window.place(x=750, y=300)
 
-        self.register_new_user_button_main_window = util.get_button(self.main_window, 'register new user', 'gray',
-                                                                    self.register_new_user, fg='black')
+        self.register_new_user_button_main_window = util.get_button(self.main_window, 'register new user', 'gray', self.register_new_user, fg='black')
         self.register_new_user_button_main_window.place(x=750, y=400)
 
+        # Webcam label for capturing and displaying webcam feed
         self.webcam_label = util.get_img_label(self.main_window)
         self.webcam_label.place(x=10, y=0, width=700, height=500)
 
@@ -42,12 +44,19 @@ class App:
     def add_webcam(self, label):
         if 'cap' not in self.__dict__:
             self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                util.msg_box('Error', 'Unable to access webcam!')
+                return
 
         self._label = label
         self.process_webcam()
 
     def process_webcam(self):
+        # Capture webcam frame
         ret, frame = self.cap.read()
+        if not ret:
+            util.msg_box('Error', 'Failed to capture webcam frame')
+            return
 
         self.most_recent_capture_arr = frame
         img_ = cv2.cvtColor(self.most_recent_capture_arr, cv2.COLOR_BGR2RGB)
@@ -56,6 +65,7 @@ class App:
         self._label.imgtk = imgtk
         self._label.configure(image=imgtk)
 
+        # Re-run after 20ms for the next frame
         self._label.after(20, self.process_webcam)
 
     def deepfake_detection(self, frame):
@@ -64,61 +74,68 @@ class App:
         Returns:
             True if a deepfake is detected, False otherwise.
         """
-        # Call the deepfake detection model (assumed to be in your anti-spoof models directory)
-        label = test(
+        try:
+            label = test(
                 image=frame,
                 model_dir='./Silent-Face-Anti-Spoofing/resources/anti_spoof_models',
                 device_id=0
-        )
-
-        # If label == 0, it's a spoof (deepfake)
-        if label == 0:
-            return True  # Deepfake detected
-        else:
-            return False  # Not a deepfake
+            )
+            return label == 0
+        except Exception as e:
+            util.msg_box('Error', f'Deepfake detection failed: {str(e)}')
+            return False  # Assume it's not a deepfake if detection fails
 
     def login(self):
-        try:
-            # Check for deepfake before proceeding with login
-            if self.deepfake_detection(self.most_recent_capture_arr):
-                util.msg_box('Hey, you are a spoofer!', 'You are fake!')
-                return
+        # Run login operations in a separate thread to avoid blocking the main thread
+        def run_login():
+            try:
+                # Check for deepfake before proceeding with login
+                if self.deepfake_detection(self.most_recent_capture_arr):
+                    util.msg_box('Hey, you are a spoofer!', 'You are fake!')
+                    return
 
-            name = util.recognize(self.most_recent_capture_arr, self.db_dir)
+                name = util.recognize(self.most_recent_capture_arr, self.db_dir)
 
-            if name in ['unknown_person', 'no_persons_found']:
-                util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
-            else:
-                # Check if image exists for the user
-                user_image_path = os.path.join(self.images_dir, f'{name}.jpg')
-                if os.path.exists(user_image_path):
-                    util.msg_box('Warning', 'User is already registered with an image!')
+                if name in ['unknown_person', 'no_persons_found']:
+                    util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
                 else:
-                    util.msg_box('Welcome back !', f'Welcome, {name}.')
-                    with open(self.log_path, 'a') as f:
-                        f.write(f'{name},{datetime.datetime.now()},in\n')
+                    # Check if image exists for the user
+                    user_image_path = os.path.join(self.images_dir, f'{name}.jpg')
+                    if os.path.exists(user_image_path):
+                        util.msg_box('Warning', 'User is already registered with an image!')
+                    else:
+                        util.msg_box('Welcome back !', f'Welcome, {name}.')
+                        with open(self.log_path, 'a') as f:
+                            f.write(f'{name},{datetime.datetime.now()},in\n')
 
-        except KeyboardInterrupt:
-            util.msg_box('Error', 'The application was interrupted unexpectedly. Please try again.')
+            except Exception as e:
+                util.msg_box('Error', f'Login process failed: {str(e)}')
+
+        # Run login process in a background thread
+        threading.Thread(target=run_login, daemon=True).start()
 
     def logout(self):
-        try:
-            # Check for deepfake before proceeding with logout
-            if self.deepfake_detection(self.most_recent_capture_arr):
-                util.msg_box('Hey, you are a spoofer!', 'You are fake!')
-                return
+        # Run logout operations in a separate thread to avoid blocking the main thread
+        def run_logout():
+            try:
+                if self.deepfake_detection(self.most_recent_capture_arr):
+                    util.msg_box('Hey, you are a spoofer!', 'You are fake!')
+                    return
 
-            name = util.recognize(self.most_recent_capture_arr, self.db_dir)
+                name = util.recognize(self.most_recent_capture_arr, self.db_dir)
 
-            if name in ['unknown_person', 'no_persons_found']:
-                util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
-            else:
-                util.msg_box('Hasta la vista !', f'Goodbye, {name}.')
-                with open(self.log_path, 'a') as f:
-                    f.write(f'{name},{datetime.datetime.now()},out\n')
+                if name in ['unknown_person', 'no_persons_found']:
+                    util.msg_box('Ups...', 'Unknown user. Please register new user or try again.')
+                else:
+                    util.msg_box('Hasta la vista !', f'Goodbye, {name}.')
+                    with open(self.log_path, 'a') as f:
+                        f.write(f'{name},{datetime.datetime.now()},out\n')
 
-        except KeyboardInterrupt:
-            util.msg_box('Error', 'The application was interrupted unexpectedly. Please try again.')
+            except Exception as e:
+                util.msg_box('Error', f'Logout process failed: {str(e)}')
+
+        # Run logout process in a background thread
+        threading.Thread(target=run_logout, daemon=True).start()
 
     def register_new_user(self):
         self.register_new_user_window = tk.Toplevel(self.main_window)
@@ -167,15 +184,18 @@ class App:
             return  # Prevent further registration
 
         # Save the image of the user
-        cv2.imwrite(user_image_path, self.register_new_user_capture)
+        try:
+            cv2.imwrite(user_image_path, self.register_new_user_capture)
 
-        embeddings = face_recognition.face_encodings(self.register_new_user_capture)[0]
+            embeddings = face_recognition.face_encodings(self.register_new_user_capture)[0]
 
-        # Save the user's embeddings to a pickle file
-        with open(os.path.join(self.db_dir, f'{name}.pickle'), 'wb') as file:
-            pickle.dump(embeddings, file)
+            # Save the user's embeddings to a pickle file
+            with open(os.path.join(self.db_dir, f'{name}.pickle'), 'wb') as file:
+                pickle.dump(embeddings, file)
 
-        util.msg_box('Success!', 'User was registered successfully!')
+            util.msg_box('Success!', 'User was registered successfully!')
+        except Exception as e:
+            util.msg_box('Error', f'Registration failed: {str(e)}')
 
         self.register_new_user_window.destroy()
 
